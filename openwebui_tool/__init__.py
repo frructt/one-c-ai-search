@@ -1,0 +1,1 @@
+"""OpenWebUI tool wrapper."""
