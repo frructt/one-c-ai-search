@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from api.query_expansion import expand_query
+from api.llm_query_expansion import LlmClient, expand_query_for_search
 from api.rerank import build_why, rerank
 from api.schemas import CandidateResponse, FindChangePlacesResponse
 from api.weaviate_search import WeaviateSearch, WeaviateSearchError
@@ -18,20 +18,34 @@ class SearchService:
         self,
         settings: Settings,
         embedder: EmbeddingClient | None = None,
+        llm_expander: LlmClient | None = None,
         search_backend: WeaviateSearch | None = None,
     ) -> None:
         self.settings = settings
         self.embedder = embedder or EmbeddingClient(
             base_url=settings.embeddings_base_url,
+            api_key=settings.embeddings_api_key,
             model=settings.embeddings_model,
             timeout_seconds=settings.embedding_timeout_seconds,
             retries=settings.embedding_retries,
             text_limit=settings.embedding_text_limit,
         )
+        self.llm_expander = llm_expander
+        if self.llm_expander is None and settings.llm_query_expansion_enabled:
+            self.llm_expander = LlmClient(
+                base_url=settings.llm_base_url,
+                api_key=settings.llm_api_key,
+                model=settings.llm_model,
+                timeout_seconds=settings.llm_timeout_seconds,
+                retries=settings.llm_retries,
+                max_tokens=settings.llm_max_tokens,
+            )
         self.search_backend = search_backend or WeaviateSearch(settings)
 
     def close(self) -> None:
         self.embedder.close()
+        if self.llm_expander is not None:
+            self.llm_expander.close()
         self.search_backend.close()
 
     def find_change_places(
@@ -44,7 +58,7 @@ class SearchService:
     ) -> FindChangePlacesResponse:
         self.settings.validate_repo_branch(repo, branch)
         limit = self.settings.clamp_limit(limit)
-        expanded_query = expand_query(query)
+        expanded_query = expand_query_for_search(query, self.llm_expander)
         internal_limit = self.settings.internal_search_limit(limit)
         LOGGER.info("search query repo=%s branch=%s limit=%s", repo, branch, limit)
 

@@ -33,7 +33,9 @@ pip install -e .
 
 - `REPO_PATH` указывает на директорию с `src`;
 - `GITLAB_BASE_URL` и `GITLAB_PROJECT_PATH` соответствуют проекту;
-- `WEAVIATE_URL` и `EMBEDDINGS_BASE_URL` доступны из окружения, где запускается PoC.
+- `WEAVIATE_URL` и `EMBEDDINGS_BASE_URL` доступны из окружения, где запускается PoC;
+- `EMBEDDINGS_API_KEY` заполнен, если embedding endpoint закрыт API-ключом;
+- `LLM_QUERY_EXPANSION_ENABLED=true`, `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL` заполнены, если нужен LLM query expansion.
 
 ## Indexing
 
@@ -46,7 +48,7 @@ python -m indexer.build_index
 - ищет все `.bsl` в `REPO_PATH`;
 - режет файлы на процедуры/функции;
 - строит `search_text`;
-- получает embeddings через OpenAI-compatible `/v1/embeddings`;
+- получает embeddings через OpenAI SDK и OpenAI-compatible `/v1/embeddings`;
 - создает collection `OneCCodeChunk`, если ее еще нет;
 - пишет chunks и self-provided vectors в Weaviate.
 
@@ -74,6 +76,10 @@ curl -X POST http://localhost:8000/find-change-places \
     "limit": 10
   }'
 ```
+
+Если включен `LLM_QUERY_EXPANSION_ENABLED`, API сначала расширяет пользовательский запрос через
+OpenAI SDK и OpenAI-compatible chat completions endpoint. При ошибке LLM используется словарный
+fallback, чтобы поиск не падал из-за недоступной модели.
 
 ## OpenWebUI Tool
 
@@ -111,7 +117,6 @@ Unit-тесты не требуют живого Weaviate или embedding endpo
 
 ## Future work
 
-- LLM query expansion вместо словаря;
 - индексация XML metadata;
 - git blame и последние коммиты;
 - поиск похожих MR;

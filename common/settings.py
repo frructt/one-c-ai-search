@@ -70,11 +70,19 @@ class Settings:
     weaviate_vector_name: str
     weaviate_batch_size: int
     embeddings_base_url: str
+    embeddings_api_key: str
     embeddings_model: str
     embedding_batch_size: int
     embedding_text_limit: int
     embedding_timeout_seconds: int
     embedding_retries: int
+    llm_query_expansion_enabled: bool
+    llm_base_url: str
+    llm_api_key: str
+    llm_model: str
+    llm_timeout_seconds: int
+    llm_retries: int
+    llm_max_tokens: int
     search_alpha: float
     search_internal_limit: int
     search_internal_limit_max: int
@@ -105,11 +113,19 @@ class Settings:
             weaviate_vector_name=os.getenv("WEAVIATE_VECTOR_NAME", "code_vector"),
             weaviate_batch_size=max(1, _int("WEAVIATE_BATCH_SIZE", 64)),
             embeddings_base_url=os.getenv("EMBEDDINGS_BASE_URL", "http://localhost:8001/v1").rstrip("/"),
+            embeddings_api_key=os.getenv("EMBEDDINGS_API_KEY") or os.getenv("OPENAI_API_KEY") or "EMPTY",
             embeddings_model=os.getenv("EMBEDDINGS_MODEL", "qwen3-embedder-8b"),
             embedding_batch_size=max(1, _int("EMBEDDING_BATCH_SIZE", 16)),
             embedding_text_limit=max(1000, _int("EMBEDDING_TEXT_LIMIT", 16000)),
             embedding_timeout_seconds=max(1, _int("EMBEDDING_TIMEOUT_SECONDS", 30)),
             embedding_retries=max(1, _int("EMBEDDING_RETRIES", 3)),
+            llm_query_expansion_enabled=_bool(os.getenv("LLM_QUERY_EXPANSION_ENABLED"), False),
+            llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8002/v1").rstrip("/"),
+            llm_api_key=os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "EMPTY",
+            llm_model=os.getenv("LLM_MODEL", "qwen2.5-coder-32b-instruct"),
+            llm_timeout_seconds=max(1, _int("LLM_TIMEOUT_SECONDS", 10)),
+            llm_retries=max(1, _int("LLM_RETRIES", 1)),
+            llm_max_tokens=max(32, _int("LLM_MAX_TOKENS", 512)),
             search_alpha=min(1.0, max(0.0, _float("SEARCH_ALPHA", 0.35))),
             search_internal_limit=max(1, _int("SEARCH_INTERNAL_LIMIT", 50)),
             search_internal_limit_max=max(1, _int("SEARCH_INTERNAL_LIMIT_MAX", 200)),

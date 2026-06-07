@@ -48,6 +48,7 @@ def main() -> int:
 
     embedder = EmbeddingClient(
         base_url=settings.embeddings_base_url,
+        api_key=settings.embeddings_api_key,
         model=settings.embeddings_model,
         timeout_seconds=settings.embedding_timeout_seconds,
         retries=settings.embedding_retries,
