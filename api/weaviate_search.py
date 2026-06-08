@@ -67,9 +67,29 @@ class WeaviateSearch:
             raise WeaviateSearchError(f"Weaviate unavailable: {exc}") from exc
 
         items: list[dict] = []
-        for obj in response.objects:
+        total = len(response.objects)
+        for rank, obj in enumerate(response.objects, start=1):
             item = dict(obj.properties)
-            score = getattr(obj.metadata, "score", None)
-            item["score"] = float(score) if score is not None else 0.0
+            item["score"] = _metadata_score(obj.metadata, rank=rank, total=total)
             items.append(item)
         return items
+
+
+def _metadata_score(metadata, *, rank: int, total: int) -> float:
+    raw_score = getattr(metadata, "score", None) if metadata is not None else None
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        return _rank_fallback_score(rank=rank, total=total)
+    if score > 0:
+        return score
+    return _rank_fallback_score(rank=rank, total=total)
+
+
+def _rank_fallback_score(*, rank: int, total: int) -> float:
+    safe_rank = max(1, rank)
+    safe_total = max(1, total, safe_rank)
+    if safe_total == 1:
+        return 1.0
+    position = (safe_rank - 1) / (safe_total - 1)
+    return round(max(0.01, 1.0 - position * 0.99), 6)
