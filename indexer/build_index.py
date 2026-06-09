@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from common.logging import configure_logging
@@ -18,14 +18,34 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
+class IndexFailure:
+    stage: str
+    path: str
+    message: str
+    symbol_name: str = ""
+
+
+@dataclass
 class IndexStats:
     files_scanned: int = 0
     files_failed: int = 0
+    chunks_failed: int = 0
     chunks_created: int = 0
     chunks_uploaded: int = 0
     embedding_errors: int = 0
     weaviate_errors: int = 0
     duration_seconds: float = 0.0
+    failures: list[IndexFailure] = field(default_factory=list)
+
+    def record_failure(self, *, stage: str, path: str | Path, message: str, symbol_name: str = "") -> None:
+        self.failures.append(
+            IndexFailure(
+                stage=stage,
+                path=str(path),
+                message=message,
+                symbol_name=symbol_name,
+            )
+        )
 
 
 def main() -> int:
@@ -72,6 +92,7 @@ def main() -> int:
                 symbols = split_bsl(code)
             except Exception as exc:
                 stats.files_failed += 1
+                stats.record_failure(stage="read_or_parse", path=file_path, message=str(exc))
                 LOGGER.warning("failed to parse file %s: %s", file_path, exc)
                 continue
 
@@ -89,7 +110,13 @@ def main() -> int:
                     pending.append(chunk)
                     stats.chunks_created += 1
                 except Exception as exc:
-                    stats.files_failed += 1
+                    stats.chunks_failed += 1
+                    stats.record_failure(
+                        stage="build_chunk",
+                        path=file_path,
+                        message=str(exc),
+                        symbol_name=symbol.symbol_name,
+                    )
                     LOGGER.warning("failed to build chunk for %s: %s", file_path, exc)
 
                 if len(pending) >= settings.embedding_batch_size:
@@ -107,7 +134,11 @@ def main() -> int:
     LOGGER.info("chunks created: %s", stats.chunks_created)
     LOGGER.info("chunks uploaded: %s", stats.chunks_uploaded)
     print_stats(stats)
-    return 0 if stats.embedding_errors == 0 and stats.weaviate_errors == 0 else 2
+    if stats.embedding_errors or stats.weaviate_errors:
+        return 2
+    if settings.indexer_fail_on_failed_files and (stats.files_failed or stats.chunks_failed):
+        return 2
+    return 0
 
 
 def _flush(pending, embedder: EmbeddingClient, writer: WeaviateWriter, stats: IndexStats) -> None:
@@ -115,6 +146,13 @@ def _flush(pending, embedder: EmbeddingClient, writer: WeaviateWriter, stats: In
         vectors = embedder.embed_batch([chunk.search_text for chunk in pending])
     except EmbeddingError as exc:
         stats.embedding_errors += len(pending)
+        for chunk in pending:
+            stats.record_failure(
+                stage="embedding",
+                path=chunk.path,
+                message=str(exc),
+                symbol_name=chunk.symbol_name,
+            )
         LOGGER.warning("failed to embed chunk batch size=%s: %s", len(pending), exc)
         return
 
@@ -123,13 +161,36 @@ def _flush(pending, embedder: EmbeddingClient, writer: WeaviateWriter, stats: In
         stats.chunks_uploaded += uploaded
     except WeaviateWriteError as exc:
         stats.weaviate_errors += len(pending)
+        for chunk in pending:
+            stats.record_failure(
+                stage="weaviate_write",
+                path=chunk.path,
+                message=str(exc),
+                symbol_name=chunk.symbol_name,
+            )
         LOGGER.warning("failed to upload chunk batch size=%s: %s", len(pending), exc)
 
 
 def print_stats(stats: IndexStats) -> None:
     print("Indexing statistics:")
-    for field, value in stats.__dict__.items():
-        print(f"{field}: {value}")
+    for name in (
+        "files_scanned",
+        "files_failed",
+        "chunks_failed",
+        "chunks_created",
+        "chunks_uploaded",
+        "embedding_errors",
+        "weaviate_errors",
+        "duration_seconds",
+    ):
+        print(f"{name}: {getattr(stats, name)}")
+    if not stats.failures:
+        return
+    print()
+    print("Indexing failures:")
+    for failure in stats.failures:
+        symbol = f" symbol={failure.symbol_name}" if failure.symbol_name else ""
+        print(f"- stage={failure.stage} path={failure.path}{symbol} message={failure.message}")
 
 
 if __name__ == "__main__":

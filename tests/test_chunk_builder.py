@@ -39,6 +39,7 @@ def settings(tmp_path: Path) -> Settings:
         search_alpha=0.35,
         search_internal_limit=50,
         search_internal_limit_max=200,
+        indexer_fail_on_failed_files=True,
         api_default_limit=10,
         api_max_limit=50,
         api_host="0.0.0.0",

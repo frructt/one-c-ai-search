@@ -86,6 +86,7 @@ class Settings:
     search_alpha: float
     search_internal_limit: int
     search_internal_limit_max: int
+    indexer_fail_on_failed_files: bool
     api_default_limit: int
     api_max_limit: int
     api_host: str
@@ -129,6 +130,7 @@ class Settings:
             search_alpha=min(1.0, max(0.0, _float("SEARCH_ALPHA", 0.35))),
             search_internal_limit=max(1, _int("SEARCH_INTERNAL_LIMIT", 50)),
             search_internal_limit_max=max(1, _int("SEARCH_INTERNAL_LIMIT_MAX", 200)),
+            indexer_fail_on_failed_files=_bool(os.getenv("INDEXER_FAIL_ON_FAILED_FILES"), True),
             api_default_limit=max(1, _int("API_DEFAULT_LIMIT", 10)),
             api_max_limit=max(1, _int("API_MAX_LIMIT", 50)),
             api_host=os.getenv("API_HOST", "0.0.0.0"),

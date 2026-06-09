@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from api.search_models import RetrievalProfile, SearchCandidate
 from common.settings import Settings
 from common.weaviate_client import connect_weaviate
 
@@ -37,28 +38,34 @@ class WeaviateSearch:
         repo: str,
         branch: str,
         limit: int,
-    ) -> list[dict]:
+        profile: RetrievalProfile | None = None,
+    ) -> list[SearchCandidate]:
         try:
             from weaviate.classes.query import Filter, MetadataQuery
         except ImportError as exc:
             raise WeaviateSearchError("weaviate-client is not installed") from exc
 
         try:
+            profile = profile or RetrievalProfile(
+                name="default",
+                alpha=self.settings.search_alpha,
+                query_properties=(
+                    "search_text^3",
+                    "symbol_name^2",
+                    "module_name^2",
+                    "identifiers",
+                    "path",
+                ),
+            )
             collection = self.client.collections.use(self.settings.weaviate_collection)
             filters = Filter.by_property("repo").equal(repo) & Filter.by_property("branch").equal(branch)
             response = collection.query.hybrid(
                 query=query,
                 vector=query_vector,
                 target_vector=self.settings.weaviate_vector_name,
-                alpha=self.settings.search_alpha,
+                alpha=profile.alpha,
                 filters=filters,
-                query_properties=[
-                    "search_text^3",
-                    "symbol_name^2",
-                    "module_name^2",
-                    "identifiers",
-                    "path",
-                ],
+                query_properties=list(profile.query_properties),
                 return_metadata=MetadataQuery(score=True),
                 limit=limit,
             )
@@ -66,11 +73,15 @@ class WeaviateSearch:
             LOGGER.error("Weaviate unavailable: %s", exc)
             raise WeaviateSearchError(f"Weaviate unavailable: {exc}") from exc
 
-        items: list[dict] = []
+        items: list[SearchCandidate] = []
         total = len(response.objects)
         for rank, obj in enumerate(response.objects, start=1):
-            item = dict(obj.properties)
-            item["score"] = _metadata_score(obj.metadata, rank=rank, total=total)
+            item = SearchCandidate.from_properties(
+                dict(obj.properties),
+                score=_metadata_score(obj.metadata, rank=rank, total=total),
+                retrieval_profile=profile.name,
+                original_rank=rank,
+            )
             items.append(item)
         return items
 

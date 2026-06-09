@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.llm_query_expansion import LlmClient, expand_query_for_search
-from api.rerank import build_why, rerank
+from api.rerank import build_why, rank_files
 from api.schemas import CandidateResponse, FindChangePlacesResponse
+from api.search_models import SearchCandidate, dedupe_candidates, default_retrieval_profiles
 from api.weaviate_search import WeaviateSearch, WeaviateSearchError
 from common.settings import Settings
 from indexer.embedder_client import EmbeddingClient, EmbeddingError
@@ -63,15 +65,15 @@ class SearchService:
         LOGGER.info("search query repo=%s branch=%s limit=%s", repo, branch, limit)
 
         query_vector = self.embedder.embed(expanded_query)
-        items = self.search_backend.search(
+        items = self._search_candidates(
             query=expanded_query,
             query_vector=query_vector,
             repo=repo,
             branch=branch,
-            limit=internal_limit,
+            internal_limit=internal_limit,
         )
         LOGGER.info("number of results: %s", len(items))
-        ranked = rerank(items, expanded_query)[:limit]
+        ranked = rank_files(dedupe_candidates(items), expanded_query)[:limit]
         candidates = [
             build_candidate_response(rank=index + 1, item=item, query=expanded_query)
             for index, item in enumerate(ranked)
@@ -84,24 +86,56 @@ class SearchService:
             candidates=candidates,
         )
 
+    def _search_candidates(
+        self,
+        *,
+        query: str,
+        query_vector: list[float],
+        repo: str,
+        branch: str,
+        internal_limit: int,
+    ) -> list[SearchCandidate]:
+        profiles = default_retrieval_profiles(self.settings.search_alpha)
+        max_workers = min(4, len(profiles))
+        items: list[SearchCandidate] = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self.search_backend.search,
+                    query=query,
+                    query_vector=query_vector,
+                    repo=repo,
+                    branch=branch,
+                    limit=profile.limit_for(internal_limit),
+                    profile=profile,
+                ): profile
+                for profile in profiles
+            }
+            for future in as_completed(futures):
+                profile = futures[future]
+                profile_items = future.result()
+                LOGGER.info("retrieval profile=%s results=%s", profile.name, len(profile_items))
+                items.extend(profile_items)
+        return items
 
-def build_candidate_response(*, rank: int, item: dict, query: str) -> CandidateResponse:
-    score = float(item.get("score") or 0.0)
-    final_score = float(item.get("final_score", score))
+
+def build_candidate_response(*, rank: int, item: SearchCandidate | dict, query: str) -> CandidateResponse:
+    score = float(_candidate_value(item, "score") or 0.0)
+    final_score = float(_candidate_value(item, "final_score") or score)
     return CandidateResponse(
         rank=rank,
-        path=str(item.get("path") or ""),
-        gitlab_url=str(item.get("gitlab_url") or ""),
-        module_name=str(item.get("module_name") or ""),
-        object_type=str(item.get("object_type") or ""),
-        symbol_name=str(item.get("symbol_name") or ""),
-        symbol_type=str(item.get("symbol_type") or ""),
-        start_line=int(item.get("start_line") or 0),
-        end_line=int(item.get("end_line") or 0),
+        path=str(_candidate_value(item, "path") or ""),
+        gitlab_url=str(_candidate_value(item, "gitlab_url") or ""),
+        module_name=str(_candidate_value(item, "module_name") or ""),
+        object_type=str(_candidate_value(item, "object_type") or ""),
+        symbol_name=str(_candidate_value(item, "symbol_name") or ""),
+        symbol_type=str(_candidate_value(item, "symbol_type") or ""),
+        start_line=int(_candidate_value(item, "start_line") or 0),
+        end_line=int(_candidate_value(item, "end_line") or 0),
         score=score,
         final_score=final_score,
         why=build_why(item, query),
-        code_preview=make_code_preview(str(item.get("code") or "")),
+        code_preview=make_code_preview(str(_candidate_value(item, "code") or "")),
     )
 
 
@@ -110,6 +144,12 @@ def make_code_preview(code: str, limit: int = 1500) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[:limit].rstrip() + "\n... [truncated]"
+
+
+def _candidate_value(item: SearchCandidate | dict, field: str):
+    if isinstance(item, SearchCandidate):
+        return getattr(item, field)
+    return item.get(field)
 
 
 __all__ = [
