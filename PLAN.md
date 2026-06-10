@@ -18,3 +18,23 @@ Accepted implementation adjustments:
 - Weaviate collection is created by the indexer and uses self-provided vectors.
 - Embeddings and Weaviate uploads are batched.
 - Unit tests avoid requiring live Weaviate or embedding services.
+
+## Metadata XML Roadmap
+
+Next accepted implementation phase:
+
+1. Start with a metadata scanner because the real XML layout differs between 1C exports.
+2. Scan `REPO_PATH` for `*.xml`, classify known 1C object folders, and report unknown XML without failing the run.
+3. Parse metadata XML with `xml.etree.ElementTree`, ignoring XML namespaces by local tag name.
+4. Build `MetadataObject` records with object name/type, synonym, comment, attributes, tabular sections, forms, commands, related BSL paths, and `search_text`.
+5. Store metadata in a separate Weaviate collection: `OneCMetadataObject`.
+6. Keep `OneCCodeChunk` unchanged.
+7. Search metadata before BSL search and boost linked `.bsl` files in file-level ranking.
+8. Add metadata evidence to candidate explanations.
+
+Out of scope for this phase:
+
+- Confluence indexing;
+- legacy `bin` indexing beyond inventory/reporting;
+- full 1C dependency graph;
+- full BSL AST parser.
