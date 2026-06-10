@@ -39,3 +39,27 @@ class CodeChunk:
 
     def to_properties(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class MetadataObject:
+    repo: str
+    branch: str
+    path: str
+    object_name: str
+    object_type: str
+    synonym: str
+    comment: str
+    attributes: list[str]
+    tabular_sections: list[str]
+    forms: list[str]
+    commands: list[str]
+    related_bsl_paths: list[str]
+    search_text: str
+    metadata_id: str
+    source_commit: str
+    indexed_at: str
+    content_hash: str
+
+    def to_properties(self) -> dict:
+        return asdict(self)

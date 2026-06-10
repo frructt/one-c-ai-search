@@ -51,6 +51,19 @@ python -m indexer.build_index
 - получает embeddings через OpenAI SDK и OpenAI-compatible `/v1/embeddings`;
 - создает collection `OneCCodeChunk`, если ее еще нет;
 - пишет chunks и self-provided vectors в Weaviate.
+- ищет XML metadata в известных папках объектов 1С;
+- строит объекты `MetadataObject` и пишет их в collection `OneCMetadataObject`;
+- unknown XML выводит в отчет, но не считает ошибкой индексации.
+
+Можно запускать части индексации отдельно:
+
+```bash
+python -m indexer.build_bsl_index
+python -m indexer.build_metadata_index
+```
+
+Поиск сначала смотрит metadata, затем `.bsl`, и добавляет ограниченный boost связанным
+`.bsl` файлам в file-level ranking.
 
 ## API
 

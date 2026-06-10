@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from api.search_models import SearchCandidate
+from api.search_models import MetadataCandidate, SearchCandidate
 
 
 TOKEN_RE = re.compile(r"[А-Яа-яA-Za-z0-9_]{3,}")
@@ -43,8 +43,15 @@ def rerank_candidates(items: list[SearchCandidate], query: str) -> list[SearchCa
     return sorted(reranked, key=lambda item: item.final_score, reverse=True)
 
 
-def rank_files(items: list[SearchCandidate], query: str) -> list[SearchCandidate]:
+def rank_files(
+    items: list[SearchCandidate],
+    query: str,
+    *,
+    metadata_hits: list[MetadataCandidate] | None = None,
+    metadata_boost_max: float = 0.25,
+) -> list[SearchCandidate]:
     reranked = rerank_candidates(items, query)
+    metadata_by_path = metadata_boosts_by_path(metadata_hits or [], metadata_boost_max)
     by_path: dict[str, list[SearchCandidate]] = {}
     for item in reranked:
         by_path.setdefault(item.path, []).append(item)
@@ -63,9 +70,16 @@ def rank_files(items: list[SearchCandidate], query: str) -> list[SearchCandidate
         profile_bonus = min(0.16, 0.04 * max(0, len(matched_profiles) - 1))
         chunk_bonus = min(0.10, 0.02 * max(0, len(sorted_items) - 1))
         file_score = best.final_score + secondary_score + profile_bonus + chunk_bonus
+        metadata_boost, metadata_evidence = metadata_by_path.get(path, (0.0, ()))
+        file_score += metadata_boost
         if any(marker in path.lower() for marker in ARCHIVE_MARKERS):
             file_score -= 0.25
-        file_candidates.append(best.with_score(final_score=file_score))
+        file_candidates.append(
+            best.with_score(final_score=file_score).with_metadata(
+                metadata_boost=metadata_boost,
+                metadata_evidence=metadata_evidence,
+            )
+        )
 
     return sorted(
         file_candidates,
@@ -90,6 +104,12 @@ def build_why(item: dict | SearchCandidate, query: str) -> list[str]:
 
     if _get(item, "symbol_type") in {"procedure", "function"}:
         reasons.append(f"найден конкретный символ: {_get(item, 'symbol_name')}")
+    metadata_evidence = _get(item, "metadata_evidence")
+    if metadata_evidence:
+        for evidence in metadata_evidence:
+            reasons.append(str(evidence))
+            if len(reasons) >= 5:
+                break
     if _get(item, "module_name"):
         reasons.append(f"модуль: {_get(item, 'module_name')}")
     profiles = _get(item, "retrieval_profiles")
@@ -98,6 +118,31 @@ def build_why(item: dict | SearchCandidate, query: str) -> list[str]:
     if not reasons:
         reasons.append("гибридный поиск поднял этот фрагмент в результаты")
     return reasons[:5]
+
+
+def metadata_boosts_by_path(
+    metadata_hits: list[MetadataCandidate],
+    metadata_boost_max: float,
+) -> dict[str, tuple[float, tuple[str, ...]]]:
+    by_path: dict[str, float] = {}
+    evidence_by_path: dict[str, list[str]] = {}
+    cap = max(0.0, metadata_boost_max)
+    for hit in metadata_hits:
+        if hit.score <= 0:
+            continue
+        per_hit_boost = min(0.10, max(0.02, hit.score * 0.10))
+        for path in hit.related_bsl_paths:
+            by_path[path] = min(cap, by_path.get(path, 0.0) + per_hit_boost)
+            evidence = evidence_by_path.setdefault(path, [])
+            evidence_text = hit.evidence_text()
+            if evidence_text not in evidence:
+                evidence.append(evidence_text)
+
+    return {
+        path: (boost, tuple(evidence_by_path.get(path, [])[:2]))
+        for path, boost in by_path.items()
+        if boost > 0
+    }
 
 
 def _candidate_score(item: dict | SearchCandidate, *, tokens: list[str], has_concrete: bool) -> float:

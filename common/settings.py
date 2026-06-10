@@ -91,6 +91,11 @@ class Settings:
     api_max_limit: int
     api_host: str
     api_port: int
+    metadata_weaviate_collection: str = "OneCMetadataObject"
+    metadata_weaviate_vector_name: str = "metadata_vector"
+    metadata_search_alpha: float = 0.35
+    metadata_search_limit: int = 20
+    metadata_boost_max: float = 0.25
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "Settings":
@@ -135,6 +140,11 @@ class Settings:
             api_max_limit=max(1, _int("API_MAX_LIMIT", 50)),
             api_host=os.getenv("API_HOST", "0.0.0.0"),
             api_port=_int("API_PORT", 8000),
+            metadata_weaviate_collection=os.getenv("METADATA_WEAVIATE_COLLECTION", "OneCMetadataObject"),
+            metadata_weaviate_vector_name=os.getenv("METADATA_WEAVIATE_VECTOR_NAME", "metadata_vector"),
+            metadata_search_alpha=min(1.0, max(0.0, _float("METADATA_SEARCH_ALPHA", 0.35))),
+            metadata_search_limit=max(1, _int("METADATA_SEARCH_LIMIT", 20)),
+            metadata_boost_max=max(0.0, _float("METADATA_BOOST_MAX", 0.25)),
         )
         if settings.search_internal_limit > settings.search_internal_limit_max:
             raise ValueError("SEARCH_INTERNAL_LIMIT must be <= SEARCH_INTERNAL_LIMIT_MAX")

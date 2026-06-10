@@ -4,9 +4,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from api.llm_query_expansion import LlmClient, expand_query_for_search
+from api.metadata_search import MetadataSearch, MetadataSearchError
 from api.rerank import build_why, rank_files
 from api.schemas import CandidateResponse, FindChangePlacesResponse
-from api.search_models import SearchCandidate, dedupe_candidates, default_retrieval_profiles
+from api.search_models import MetadataCandidate, SearchCandidate, dedupe_candidates, default_retrieval_profiles
 from api.weaviate_search import WeaviateSearch, WeaviateSearchError
 from common.settings import Settings
 from indexer.embedder_client import EmbeddingClient, EmbeddingError
@@ -22,6 +23,7 @@ class SearchService:
         embedder: EmbeddingClient | None = None,
         llm_expander: LlmClient | None = None,
         search_backend: WeaviateSearch | None = None,
+        metadata_search_backend: MetadataSearch | None = None,
     ) -> None:
         self.settings = settings
         self.embedder = embedder or EmbeddingClient(
@@ -43,12 +45,14 @@ class SearchService:
                 max_tokens=settings.llm_max_tokens,
             )
         self.search_backend = search_backend or WeaviateSearch(settings)
+        self.metadata_search_backend = metadata_search_backend or MetadataSearch(settings)
 
     def close(self) -> None:
         self.embedder.close()
         if self.llm_expander is not None:
             self.llm_expander.close()
         self.search_backend.close()
+        self.metadata_search_backend.close()
 
     def find_change_places(
         self,
@@ -65,6 +69,12 @@ class SearchService:
         LOGGER.info("search query repo=%s branch=%s limit=%s", repo, branch, limit)
 
         query_vector = self.embedder.embed(expanded_query)
+        metadata_hits = self._search_metadata(
+            query=expanded_query,
+            query_vector=query_vector,
+            repo=repo,
+            branch=branch,
+        )
         items = self._search_candidates(
             query=expanded_query,
             query_vector=query_vector,
@@ -73,7 +83,12 @@ class SearchService:
             internal_limit=internal_limit,
         )
         LOGGER.info("number of results: %s", len(items))
-        ranked = rank_files(dedupe_candidates(items), expanded_query)[:limit]
+        ranked = rank_files(
+            dedupe_candidates(items),
+            expanded_query,
+            metadata_hits=metadata_hits,
+            metadata_boost_max=self.settings.metadata_boost_max,
+        )[:limit]
         candidates = [
             build_candidate_response(rank=index + 1, item=item, query=expanded_query)
             for index, item in enumerate(ranked)
@@ -85,6 +100,28 @@ class SearchService:
             branch=branch,
             candidates=candidates,
         )
+
+    def _search_metadata(
+        self,
+        *,
+        query: str,
+        query_vector: list[float],
+        repo: str,
+        branch: str,
+    ) -> list[MetadataCandidate]:
+        try:
+            items = self.metadata_search_backend.search(
+                query=query,
+                query_vector=query_vector,
+                repo=repo,
+                branch=branch,
+                limit=self.settings.metadata_search_limit,
+            )
+        except MetadataSearchError as exc:
+            LOGGER.warning("metadata search skipped: %s", exc)
+            return []
+        LOGGER.info("metadata search results: %s", len(items))
+        return items
 
     def _search_candidates(
         self,

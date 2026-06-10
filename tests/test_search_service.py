@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from api.search_models import SearchCandidate
+from api.search_models import MetadataCandidate, SearchCandidate
 from api.search_service import SearchService
 from common.settings import Settings
 
@@ -34,6 +34,27 @@ class FakeSearchBackend:
             }
         )
         return self.by_profile.get(profile.name, [])
+
+    def close(self):
+        pass
+
+
+class FakeMetadataSearchBackend:
+    def __init__(self, items=None, calls=None):
+        self.items = items or []
+        self.calls = calls if calls is not None else []
+
+    def search(self, *, query, query_vector, repo, branch, limit):
+        self.calls.append(
+            {
+                "query": query,
+                "query_vector": query_vector,
+                "repo": repo,
+                "branch": branch,
+                "limit": limit,
+            }
+        )
+        return self.items
 
     def close(self):
         pass
@@ -80,6 +101,7 @@ def test_search_service_uses_multiple_profiles_and_ranks_files():
         embedder=FakeEmbedder(),
         llm_expander=None,
         search_backend=backend,
+        metadata_search_backend=FakeMetadataSearchBackend(),
     )
 
     response = service.find_change_places(
@@ -129,6 +151,7 @@ def test_search_service_deduplicates_chunks_across_profiles():
         embedder=FakeEmbedder(),
         llm_expander=None,
         search_backend=backend,
+        metadata_search_backend=FakeMetadataSearchBackend(),
     )
 
     response = service.find_change_places(
@@ -140,6 +163,60 @@ def test_search_service_deduplicates_chunks_across_profiles():
 
     assert len(response.candidates) == 1
     assert response.candidates[0].score == 0.80
+
+
+def test_search_service_uses_metadata_hits_to_boost_linked_files():
+    linked = candidate(
+        path="src/configuration/Documents/Заявка/Ext/ObjectModule.bsl",
+        symbol_name="Заполнить",
+        score=0.65,
+        chunk_id="linked",
+        retrieval_profiles=("balanced",),
+        original_rank=2,
+    )
+    unlinked = candidate(
+        path="src/CommonModules/ОбщиеТарифы/Ext/Module.bsl",
+        symbol_name="РассчитатьТариф",
+        score=0.70,
+        chunk_id="unlinked",
+        retrieval_profiles=("balanced",),
+        original_rank=1,
+    )
+    metadata_calls = []
+    metadata_backend = FakeMetadataSearchBackend(
+        items=[
+            metadata_candidate(
+                related_bsl_paths=["src/configuration/Documents/Заявка/Ext/ObjectModule.bsl"],
+                score=1.0,
+            )
+        ],
+        calls=metadata_calls,
+    )
+    service = SearchService(
+        settings(),
+        embedder=FakeEmbedder(),
+        llm_expander=None,
+        search_backend=FakeSearchBackend(
+            {
+                "balanced": [linked, unlinked],
+                "keyword": [],
+                "metadata": [],
+                "vector": [],
+            }
+        ),
+        metadata_search_backend=metadata_backend,
+    )
+
+    response = service.find_change_places(
+        query="Нужно изменить заявку на температурный груз",
+        repo="gp",
+        branch="master",
+        limit=10,
+    )
+
+    assert metadata_calls
+    assert response.candidates[0].path == "src/configuration/Documents/Заявка/Ext/ObjectModule.bsl"
+    assert any("метаданные" in reason for reason in response.candidates[0].why)
 
 
 def candidate(
@@ -175,6 +252,30 @@ def candidate(
         final_score=score,
         retrieval_profiles=retrieval_profiles,
         original_rank=original_rank,
+    )
+
+
+def metadata_candidate(*, related_bsl_paths: list[str], score: float) -> MetadataCandidate:
+    return MetadataCandidate(
+        repo="gp",
+        branch="master",
+        path="src/configuration/Documents/Заявка",
+        object_name="Заявка",
+        object_type="Document",
+        synonym="Заявка на перевозку",
+        comment="",
+        attributes=["ТемпературныйРежим"],
+        tabular_sections=[],
+        forms=[],
+        commands=[],
+        related_bsl_paths=related_bsl_paths,
+        search_text="Заявка",
+        metadata_id="meta-1",
+        source_commit="abc",
+        indexed_at="2026-06-10T00:00:00+00:00",
+        content_hash="hash",
+        score=score,
+        original_rank=1,
     )
 
 

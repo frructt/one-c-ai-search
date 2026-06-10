@@ -41,6 +41,8 @@ class SearchCandidate:
     final_score: float
     retrieval_profiles: tuple[str, ...]
     original_rank: int
+    metadata_boost: float = 0.0
+    metadata_evidence: tuple[str, ...] = ()
 
     @classmethod
     def from_properties(
@@ -84,20 +86,94 @@ class SearchCandidate:
             final_score=self.final_score if final_score is None else round(final_score, 6),
         )
 
+    def with_metadata(
+        self,
+        *,
+        metadata_boost: float,
+        metadata_evidence: tuple[str, ...],
+    ) -> "SearchCandidate":
+        return replace(
+            self,
+            metadata_boost=round(metadata_boost, 6),
+            metadata_evidence=metadata_evidence,
+        )
+
     def merge(self, other: "SearchCandidate") -> "SearchCandidate":
         profiles = tuple(dict.fromkeys((*self.retrieval_profiles, *other.retrieval_profiles)))
+        evidence = tuple(dict.fromkeys((*self.metadata_evidence, *other.metadata_evidence)))
         return replace(
             self if self.score >= other.score else other,
             score=max(self.score, other.score),
             final_score=max(self.final_score, other.final_score),
             retrieval_profiles=profiles,
             original_rank=min(self.original_rank, other.original_rank),
+            metadata_boost=max(self.metadata_boost, other.metadata_boost),
+            metadata_evidence=evidence,
         )
 
     def key(self) -> str:
         if self.chunk_id:
             return self.chunk_id
         return f"{self.path}|{self.symbol_name}|{self.start_line}"
+
+
+@dataclass(frozen=True)
+class MetadataCandidate:
+    repo: str
+    branch: str
+    path: str
+    object_name: str
+    object_type: str
+    synonym: str
+    comment: str
+    attributes: list[str]
+    tabular_sections: list[str]
+    forms: list[str]
+    commands: list[str]
+    related_bsl_paths: list[str]
+    search_text: str
+    metadata_id: str
+    source_commit: str
+    indexed_at: str
+    content_hash: str
+    score: float
+    original_rank: int
+
+    @classmethod
+    def from_properties(
+        cls,
+        properties: dict[str, Any],
+        *,
+        score: float,
+        original_rank: int,
+    ) -> "MetadataCandidate":
+        return cls(
+            repo=_string(properties.get("repo")),
+            branch=_string(properties.get("branch")),
+            path=_string(properties.get("path")),
+            object_name=_string(properties.get("object_name")),
+            object_type=_string(properties.get("object_type")),
+            synonym=_string(properties.get("synonym")),
+            comment=_string(properties.get("comment")),
+            attributes=_strings(properties.get("attributes")),
+            tabular_sections=_strings(properties.get("tabular_sections")),
+            forms=_strings(properties.get("forms")),
+            commands=_strings(properties.get("commands")),
+            related_bsl_paths=_strings(properties.get("related_bsl_paths")),
+            search_text=_string(properties.get("search_text")),
+            metadata_id=_string(properties.get("metadata_id")),
+            source_commit=_string(properties.get("source_commit")),
+            indexed_at=_string(properties.get("indexed_at")),
+            content_hash=_string(properties.get("content_hash")),
+            score=score,
+            original_rank=original_rank,
+        )
+
+    def evidence_text(self) -> str:
+        label = f"{self.object_type} {self.object_name}".strip()
+        if self.synonym:
+            label = f"{label} ({self.synonym})" if label else self.synonym
+        return f"метаданные: {label}" if label else "метаданные объекта"
 
 
 def default_retrieval_profiles(search_alpha: float) -> tuple[RetrievalProfile, ...]:
